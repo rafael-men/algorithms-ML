@@ -1,0 +1,252 @@
+import pandas as pd
+from sklearn.compose import ColumnTransformer
+from sklearn.ensemble import RandomForestClassifier
+from sklearn.naive_bayes import BernoulliNB
+from sklearn.preprocessing import Binarizer, OneHotEncoder, StandardScaler
+from sklearn.model_selection import train_test_split, cross_val_score, StratifiedKFold
+from sklearn.tree import DecisionTreeClassifier
+from sklearn.neighbors import KNeighborsClassifier
+from sklearn.metrics import classification_report, confusion_matrix, f1_score
+from sklearn.pipeline import Pipeline
+from sklearn.pipeline import Pipeline as SKPipeline
+
+
+dataset = '../dataset/Dataset-Sheet.xlsx'
+
+df = pd.read_excel(dataset)
+
+categorias = ['planet','zodiac','yes_no','yes_no_reversed']
+numericas = ['number_numerology']
+
+def classes(row):
+    if row['arcana'] == 'major':
+        return 'major'
+    return row['suit']
+
+df['label'] = df.apply(classes,axis=1)
+
+# prepara features
+features = df[
+    categorias + numericas
+].copy()
+y = df['label']
+
+for coluna in categorias:
+    features[coluna] = (
+        features[coluna]
+        .fillna('unknown')
+    )
+
+for coluna in numericas:
+    features[coluna] = pd.to_numeric(
+        features[coluna],
+        errors='coerce'
+    )
+    features[coluna] = features[coluna].fillna(
+        features[coluna].median()
+    )
+
+preprocessador = ColumnTransformer(
+    transformers=[
+        (
+            'cat',
+            OneHotEncoder(
+                handle_unknown='ignore'
+            ),
+            categorias
+        ),
+        (
+            'num',
+            StandardScaler(),
+            numericas
+        )
+    ]
+)
+
+preprocessador_nb = ColumnTransformer(
+    transformers = [
+          (
+            'cat',
+            OneHotEncoder(handle_unknown='ignore'),
+            categorias
+        ),
+        (
+            'num',
+            SKPipeline([('scaler', StandardScaler()), ('bin', Binarizer(threshold=0.0))]),
+            numericas
+        )
+    ]
+)
+
+# treinamento estratificado
+
+X_train, X_test, y_train, y_test = train_test_split(
+    features,
+    y,
+    test_size=0.25,
+    random_state=42,
+    stratify=y
+)
+
+cv = StratifiedKFold(
+    n_splits=5,
+    shuffle=True,
+    random_state=42
+)
+
+# naive bayes
+bnb = Pipeline (
+    steps = [
+        ('preprocessador', preprocessador_nb),
+        ('modelo', BernoulliNB(alpha=1.0)) 
+    ]
+)
+resultados_nb = cross_val_score(
+    bnb,
+    features,
+    y,
+    cv=cv,
+    scoring='accuracy'
+)
+print("Acurácia do BernoulliNB: %.4f ± %.4f"% (resultados_nb.mean(), resultados_nb.std()))
+bnb.fit(X_train, y_train)
+y_pred_bnb = bnb.predict(X_test)
+
+# random forest
+forest = Pipeline(
+    steps=[('preprocessador', preprocessador),('modelo', RandomForestClassifier(n_estimators=200, random_state=42, n_jobs=-1))]
+)
+random = cross_val_score(forest,features,y,cv=cv,scoring='accuracy')
+print("Acurácia da random forest: %.4f ± %.4f"% (random.mean(), random.std()))
+forest.fit(X_train,y_train)
+y_pr_forest = forest.predict(X_test)
+
+# árvore de decisão
+classificador = Pipeline(
+    steps=[
+        (
+            'preprocessador',
+            preprocessador
+        ),
+        (
+            'modelo',
+            DecisionTreeClassifier(
+                criterion='gini',
+                max_depth=3,
+                random_state=42
+            )
+        )
+    ]
+)
+resultados_arvore = cross_val_score(
+    classificador,
+    features,
+    y,
+    cv=cv,
+    scoring='accuracy'
+)
+print(
+    "Acurácia da árvore de decisão: %.4f ± %.4f"
+    % (
+        resultados_arvore.mean(),
+        resultados_arvore.std()
+    )
+)
+classificador.fit(X_train,y_train)
+y_pred_dt = classificador.predict( X_test)
+
+# KNN com k = 5
+knn = Pipeline(
+    steps=[
+        (
+            'preprocessador',
+            preprocessador
+        ),
+
+        (
+            'modelo',
+            KNeighborsClassifier(
+                n_neighbors=5
+            )
+        )
+    ]
+)
+resultados_knn = cross_val_score(
+    knn,
+    features,
+    y,
+    cv=cv,
+    scoring='accuracy'
+)
+print(
+    "Acurácia do KNN com k=5: %.4f ± %.4f"
+    % (
+        resultados_knn.mean(),
+        resultados_knn.std()
+    )
+)
+knn.fit(X_train,y_train)
+y_pred_knn = knn.predict(X_test)
+
+# resultado naive
+print("\nResultados do Naive Bayes:")
+print(classification_report(y_test,y_pred_bnb))
+classes_nb = bnb.named_steps['modelo'].classes_
+print("Matriz de confusão:\n", confusion_matrix(y_test, y_pred_bnb, labels=classes_nb))
+
+# resultado árvore de decisão
+print("\nResultados da árvore de decisão:")
+print(classification_report( y_test,y_pred_dt))
+classes_arvore = (classificador.named_steps['modelo'].classes_)
+print("Matriz de confusão:\n",confusion_matrix( y_test,y_pred_dt,labels=classes_arvore))
+
+# resultado random forest
+print("\nResultados  Random Forest:")
+print(classification_report(y_test,y_pr_forest,zero_division=0))
+classes_forest = (forest.named_steps['modelo'].classes_)
+print("Matriz de confusão:\n",confusion_matrix( y_test,y_pr_forest,labels=classes_forest))
+
+# resultado knn
+print("\nResultados do KNN:")
+print(classification_report(y_test,y_pred_knn))
+classes_knn = (knn.named_steps['modelo'].classes_)
+print("Matriz de confusão:\n",confusion_matrix(y_test,y_pred_knn, labels=classes_knn))
+
+acc_bnb = (y_pred_bnb == y_test).mean()
+acc_dt = (y_pred_dt == y_test).mean()
+acc_forest = (y_pr_forest == y_test).mean()
+acc_knn = ( y_pred_knn == y_test).mean()
+
+f1_dt = f1_score(y_test,y_pred_dt,average='macro')
+f1_knn = f1_score(y_test,y_pred_knn,average='macro')
+f1_forest = f1_score(y_test, y_pr_forest,average='macro')
+f1_bnb = f1_score(y_test, y_pred_bnb, average='macro')
+
+print('\nResultados: ')
+print("\nAcurácia - BernoulliNB: %.4f | Macro: %.4f" % (acc_bnb, f1_bnb))
+print("\nAcurácia - Árvore de Decisão: %.4f | Macro: %.4f"% (acc_dt, f1_dt))
+print("Random Forest - Acurácia: %.4f | Macro: %.4f"% (acc_forest,f1_forest))
+print("KNN k=5 - Acurácia: %.4f | Macro: %.4f"% (acc_knn,f1_knn))
+
+
+print("\nValidação cruzada 5-Fold:")
+print("BernoulliNB: %.2f%% ± %.2f%%" % (resultados_nb.mean() * 100, resultados_nb.std() * 100))
+print("Random Forest: %.2f%% ± %.2f%%"% (random.mean() * 100,random.std() * 100))
+print("Árvore de Decisão: %.2f%% ± %.2f%%"% (resultados_arvore.mean() * 100,resultados_arvore.std() * 100))
+print("KNN k=5: %.2f%% ± %.2f%%"% (resultados_knn.mean() * 100,resultados_knn.std() * 100))
+
+res= {
+    'BernoulliNB': resultados_nb.mean(),
+    'Árvore de Decisão': resultados_arvore.mean(),
+    'Random Forest': random.mean(),
+    'KNN k=5': resultados_knn.mean()
+}
+
+melhor_algoritmo = max(res,key=res.get)
+
+melhor_acuracia = res[
+    melhor_algoritmo
+]
+
+print("\nMelhor algoritmo:")
+print("%s com acurácia média de %.2f%% no 5-Fold."% (melhor_algoritmo,melhor_acuracia * 100))
