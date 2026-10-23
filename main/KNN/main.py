@@ -1,18 +1,19 @@
 import json
 import pandas as pd
 from sklearn.compose import ColumnTransformer
-from sklearn.model_selection import StratifiedKFold
+from sklearn.impute import SimpleImputer
+from sklearn.model_selection import GridSearchCV, StratifiedKFold, cross_val_score
 from sklearn.neighbors import KNeighborsClassifier
-from sklearn.preprocessing import OneHotEncoder
+from sklearn.pipeline import Pipeline
+from sklearn.preprocessing import OneHotEncoder, StandardScaler
 from sklearn.feature_extraction.text import TfidfVectorizer
 
 # Classificação de cartas por naipe e arcano maior com KNN, comparando acuracias com validação cruzada K-Fold (5)
 
-dataset = 'dataset/cards.json'
-nome_col = 'name'
+dataset = '../dataset/Dataset-Sheet.xlsx'
 categorias = [ 'planet', 'zodiac', 'element', 'yes_no', 'yes_no_reversed' ]
 numericas = [ 'number_numerology' ]
-texto_col = [
+texto = [
     "keywords_upright",
     "keywords_reversed",
     "meaning_upright",
@@ -23,115 +24,89 @@ texto_col = [
     "spiritual",
 ]
 
-def load_dataset(path):
-    with open(path, 'r', encoding='utf-8') as f:
-        data = json.load(f)
-    if isinstance(data,dict):
-       df = pd.json_normalize([ { 'name': nome, **dados } for nome, dados in data.items() ])
-    else:
-       df = pd.json_normalize(data)
-    print("Colunas: ")
-    print(list(df.columns))
-    print("Primeiras linhas: ", len(df))
-    print(df.head())
-    return df
-
-def build(df):
-   def definir_classe(row):
-      if row['arcana'] == 'major':
-         return 'major'
-      return row['suit']
-   df['label'] = df.apply(definir_classe, axis=1)
-   print("Classes: ",df['label'].value_counts())
+def carregar(dataset):
+   df = pd.read_excel(dataset)
+   df.columns = df.columns.str.strip().str.lower().str.replace(" ", "_")
    return df
 
-def features(df):
-    categorias_ex = [c for c in categorias if c in df.columns]
-    numericas_ex = [c for c in numericas if c in df.columns]
-    texto_ex = [c for c in texto_col if c in df.columns]
-    text_df = df[texto_ex].copy()
-    def normalizar_texto(valor):
-        if isinstance(valor, list):
-            return ' '.join(str(item) for item in valor)
+def aggregate_col(valor):
+    if isinstance(valor, list):
+        return " ".join(map(str, valor))
+    if pd.isna(valor):
+        return ""
+    return str(valor)
 
-        if valor is None:
-            return ''
-        return str(valor)
-    
-    text_df = text_df.map(normalizar_texto)
-    df['text_blob'] = text_df.agg(' '.join, axis=1)
-    for col in numericas_ex:
-        df[col] = pd.to_numeric(df[col], errors='coerce')
-        df[col] = df[col].fillna(df[col].median())
-    X = df[ categorias_ex + numericas_ex + ['text_blob']]
-    y = df['label']
-    return X, y, categorias_ex, numericas_ex
+def preparar(df):
+    # arcano maior e naipes 
+    y = df["suit"].mask(df["arcana"] == "major", "major")
 
-def preprocessamento(categorias,numericas):
-   column_transformer = ColumnTransformer(
-      transformers = [
-         ( 'cat', OneHotEncoder( handle_unknown='ignore' ), categorias ), 
-         ( 'num', 'passthrough', numericas ), 
-         ( 'text', TfidfVectorizer( max_features=100, stop_words='english' ), 'text_blob' )
-      ]
-   )
-   return column_transformer
+    cat = [c for c in categorias if c in df.columns]
+    num = [c for c in numericas if c in df.columns]
+    txt = [c for c in texto if c in df.columns]
 
-def k_fold(X,y,categorias,numericas):
-   skf = StratifiedKFold(n_splits=5, shuffle=True, random_state=42)
-   modelos={
-      'KNN=3': KNeighborsClassifier(n_neighbors=3),
-      'KNN=5': KNeighborsClassifier(n_neighbors=5),
-      'KNN=7': KNeighborsClassifier(n_neighbors=7),
-   }
-   print('Resultados da validação cruzada:')
-   results = []
-   acuracias_media = {}
-   for name,clf in modelos.items():
-      fold_acuracia = []
-      for train_index, test_index in skf.split(X, y):
-         X_train = X.iloc[train_index]
-         X_test = X.iloc[test_index]
-         y_train = y.iloc[train_index]
-         y_test = y.iloc[test_index]
-         preprocessador = preprocessamento(categorias, numericas)
-         X_train_transformed = (preprocessador.fit_transform(X_train))
-         X_test_transformed = (preprocessador.transform(X_test))
-         clf.fit(X_train_transformed, y_train)
-         acuracia = clf.score(X_test_transformed, y_test)
-         fold_acuracia.append(acuracia)
-      acuracia_media = sum(fold_acuracia) / len(fold_acuracia)
-      acuracias_media[name] = acuracia_media
-      std_acuracia = (pd.Series(fold_acuracia).std())
-      results.append({
-         'Modelo': name,
-         'Acurácia Média': f"{acuracia_media * 100:.2f}%",
-         'Desvio Padrão': f"{std_acuracia * 100:.2f}%"
-      })
-   melhor = max(acuracias_media, key=acuracias_media.get)
-   print(pd.DataFrame(results).to_string(index=False))
-   print()
-   print(f"Melhor: {melhor}" f" com acurácia média de {acuracias_media[melhor] * 100:.2f}%")
-   return results
+    X = pd.DataFrame(index=df.index)
+    for c in cat:
+        X[c] = df[c].fillna("desconhecido").astype(str)
+    for c in num:
+        X[c] = pd.to_numeric(df[c], errors="coerce")
+    X["texto"] = df[txt].map(aggregate_col).agg(" ".join, axis=1)
+    return X, y, cat, num
 
-def executar_knn():
-    df = load_dataset(dataset)
-    df = build(df)
-    X, y, categorias_ex, numericas_ex = features(df)
-    resultados = k_fold(
-        X,
-        y,
-        categorias_ex,
-        numericas_ex
-    )
-    return resultados
 
-      
+def pipeline(cats, nums):
+    pre = ColumnTransformer([
+        ("cat", OneHotEncoder(handle_unknown="ignore"), cats),
+        ("num", Pipeline([
+            ("imp", SimpleImputer(strategy="median")),
+            ("esc", StandardScaler()),
+        ]), nums),
+        ("txt", TfidfVectorizer(
+            stop_words="english", ngram_range=(1, 2),
+            min_df=2, sublinear_tf=True, max_features=500,
+        ), "texto"),
+    ])
+    knn = KNeighborsClassifier(metric="cosine", algorithm="brute")
+    return Pipeline([("pre", pre), ("knn", knn)])
+
+
+grade_testes = {
+    "knn__n_neighbors": [3, 5, 7, 9],
+    "knn__weights": ["uniform", "distance"],
+    "pre__transformer_weights": [
+        {"cat": 1, "num": 1, "txt": 1},
+        {"cat": 2, "num": 1, "txt": 1},
+        {"cat": 1, "num": 1, "txt": 2},
+    ],
+}
+
+
 def main():
-   df = load_dataset(dataset)
-   df = build(df)
-   X, y, categorias_ex,numericas_ex = features(df)
-   k_fold(X, y, categorias_ex, numericas_ex)
-if __name__ == "__main__":
-   main()
+    df = carregar(dataset)
+    print("Colunas:", df.columns.tolist())
+    X, y, cats, nums = preparar(df)
+    print(y.value_counts(), "\n")
+    pipe = pipeline(cats, nums)
+    interno = StratifiedKFold(5, shuffle=True, random_state=42)
+    externo = StratifiedKFold(5, shuffle=True, random_state=7)
+    busca = GridSearchCV(pipe, grade_testes, cv=interno, scoring="accuracy", n_jobs=-1)
+    notas = cross_val_score(busca, X, y, cv=externo)
+    print(f"Acurácia (CV aninhada): {notas.mean():.2%} ± {notas.std():.2%}")
+    busca.fit(X, y)
+    print("Melhores parâmetros:", busca.best_params_)
 
+    res = pd.DataFrame(busca.cv_results_)
+    res["k"] = res["param_knn__n_neighbors"]
+    res["pesos"] = res["param_knn__weights"]
+
+    tabela = (
+    res.groupby(["k", "pesos"])["mean_test_score"]
+    .max()
+    .unstack()
+    .mul(100)
+    .round(2)
+   )
+    print("\nMelhor acurácia por k (%):")
+    print(tabela)
+    
+if __name__ == "__main__":
+    main()

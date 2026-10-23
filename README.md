@@ -1,14 +1,13 @@
-# Cartas de Tarot — Classificação com Machine Learning
+# Cartas de Tarot — Algoritmos de Machine Learning
 
 Experimento de classificação supervisionada que tenta identificar o **grupo de uma carta de tarot**
 (arcano maior ou um dos quatro naipes) a partir dos atributos presentes na base de cartas.
-O projeto compara famílias de algoritmos de machine learningusando validação cruzada e diferentes esquemas de
-pré-processamento.
+O projeto compara famílias de algoritmos de ML usando validação cruzada e diferentes
+esquemas de pré-processamento.
 
 - **Tarefa:** classificação multiclasse (5 classes)
 - **Amostras:** 78 cartas (22 arcanos maiores + 56 cartas de naipe)
 - **Stack:** Python 3.13 + pandas + scikit-learn
-- **Idioma dos scripts:** português (comentários, rótulos e relatórios)
 
 ---
 
@@ -29,10 +28,10 @@ ou uma escolha específica de pré-processamento.
 
 A base fica em `main/dataset/` e existe em dois formatos equivalentes (78 registros × 22 atributos):
 
-| Arquivo | Formato | Formato usado por |
+| Arquivo | Formato | Usado por |
 | --- | --- | --- |
-| `cards.json` | JSON (array de objetos) | `main/KNN`, `main/Naive-Bayes-KNN` |
-| `Dataset-Sheet.xlsx` | Excel (aba `cards`) | `main/decision-tree`, `main/Comparações` |
+| `cards.json` | JSON (array de objetos) | `main/Naive-Bayes-KNN` |
+| `Dataset-Sheet.xlsx` | Excel (aba `cards`) | `main/KNN`, `main/Bernoulli-NB`, `main/decision-tree`, `main/Comparações` |
 
 ### Definição do rótulo (target)
 
@@ -68,25 +67,59 @@ else:
 
 ## Metodologia
 
-Todos os scripts seguem o mesmo pipeline:
+Os scripts seguem a mesma lógica geral. Os de KNN e Bernoulli NB (e a comparação entre eles) foram
+reescritos com `Pipeline` e validação aninhada; os demais mantêm o fluxo original, descrito mais abaixo.
+
+### Scripts reescritos: `KNN`, `Bernoulli-NB` e `Comparações/knn_bnb.py`
+
+1. **Carga** — `pd.read_excel` na planilha, com os nomes das colunas padronizados
+   (`strip`, `lower`, espaços trocados por `_`).
+2. **Rótulo** — `major` quando `arcana == 'major'`, caso contrário `suit`.
+3. **Montagem do `X`**
+   - categóricas: `fillna('desconhecido')`
+   - numérica: `to_numeric` (valores ausentes ficam para o imputador do pipeline)
+   - texto: listas são achatadas, células vazias viram string vazia e todas as colunas textuais
+     (incluindo as variantes `_reversed`) são concatenadas em uma coluna `texto`
+4. **Pré-processamento dentro do `Pipeline`** (ajustado só com o treino de cada fold):
+
+   | Bloco | KNN | Bernoulli NB |
+   | --- | --- | --- |
+   | Categóricas | `OneHotEncoder` | `OneHotEncoder` |
+   | `number_numerology` | `SimpleImputer(median)` + `StandardScaler` | `SimpleImputer(most_frequent)` + `OneHotEncoder` (tratado como categoria) |
+   | Texto | `TfidfVectorizer` (1-2 gramas, `min_df=2`, `sublinear_tf`, 500 termos) | `CountVectorizer(binary=True)` (1-2 gramas, `min_df=2`) |
+
+5. **Classificador**
+   - KNN: `metric='cosine'`, `algorithm='brute'`
+   - Bernoulli NB: `binarize=None`, já que todas as features entram como 0/1
+6. **Validação cruzada aninhada**
+   - `GridSearchCV` com `StratifiedKFold(5, shuffle=True, random_state=42)` (interno) escolhe os
+     hiperparâmetros
+   - `cross_val_score` com `StratifiedKFold(5, shuffle=True, random_state=7)` (externo) mede a
+     acurácia, de modo que a escolha dos hiperparâmetros nunca vê o fold de teste
+
+Grades de hiperparâmetros:
+
+| Modelo | Parâmetros testados |
+| --- | --- |
+| KNN | `n_neighbors` = 3, 5, 7, 9; `weights` = uniform, distance; peso dos blocos (`cat`, `num`, `txt`) = 1/1/1, 2/1/1, 1/1/2 |
+| Bernoulli NB | `alpha` = 0.1, 0.3, 0.5, 1.0, 2.0; `fit_prior` = True, False; `max_features` do vocabulário = 200, 500, 1000 |
+
+### Demais scripts (fluxo original)
 
 1. **Carga** — `json.load` + `pd.json_normalize` (JSON) ou `pd.read_excel` (planilha).
-2. **Rótulo** — `major` quando `arcana == 'major'`, caso contrário `suit`.
+2. **Rótulo** — igual ao descrito acima.
 3. **Engenharia de features**
    - colunas categóricas: `fillna('unknown')`
    - coluna numérica: `to_numeric` + `fillna(median)`
-   - colunas de texto: listas são achatadas com *join* e todas as colunas textuais são
-     concatenadas em um único `text_blob`
-4. **Pré-processamento** — `ColumnTransformer` combinando:
-   - `OneHotEncoder(handle_unknown='ignore')` para categóricos
-   - `StandardScaler` / `MinMaxScaler` / `passthrough` para o número de numerologia
-   - `TfidfVectorizer(max_features=100, stop_words='english')` para o `text_blob`
-     (usado apenas nos scripts de KNN)
+   - colunas de texto: listas são achatadas com *join* e concatenadas em um único `text_blob`
+4. **Pré-processamento** — `ColumnTransformer` combinando `OneHotEncoder(handle_unknown='ignore')`
+   para categóricos, `StandardScaler` / `MinMaxScaler` / `passthrough` para a numérica e
+   `TfidfVectorizer(max_features=100, stop_words='english')` para o `text_blob` (só no KNN).
 5. **Validação**
-   - `StratifiedKFold(n_splits=5, shuffle=True, random_state=42)` nos scripts de KNN e comparações
+   - `StratifiedKFold(n_splits=5, shuffle=True, random_state=42)` em `Naive-Bayes-KNN` e `Comparações`
    - `train_test_split(test_size=0.25, stratify=y, random_state=42)` nos scripts de árvore/RF
 
-> Os scripts usam `StratifiedKFold` com divisão por índice (`skf.split`) e retreinam um
+> Esses scripts usam `StratifiedKFold` com divisão por índice (`skf.split`) e retreinam um
 > `ColumnTransformer` novo a cada fold, evitando vazamento de dados entre treino e teste.
 
 ---
@@ -95,7 +128,9 @@ Todos os scripts seguem o mesmo pipeline:
 
 | Script | Modelo(s) | Hiperparâmetros | Validação |
 | --- | --- | --- | --- |
-| `main/KNN/main.py` | KNN | `n_neighbors` = 3, 5, 7 | 5-fold |
+| `main/KNN/main.py` | KNN | grade (ver acima), cosseno | 5-fold aninhado |
+| `main/Bernoulli-NB/main.py` | Bernoulli NB | grade (ver acima) | 5-fold aninhado |
+| `main/Comparações/knn_bnb.py` | KNN + Bernoulli NB | grades acima, mesmos folds externos | 5-fold aninhado |
 | `main/Naive-Bayes-KNN/main.py` | KNN + Naive Bayes | `k` = 3, 5, 7; `MultinomialNB()` | 5-fold |
 | `main/decision-tree/main.py` | Árvore de Decisão | `criterion='gini'`, `max_depth=3` | hold-out 25% |
 | `main/decision-tree/random -forest/main.py` | Random Forest | `n_estimators=200`, `n_jobs=-1` | hold-out 25% + 5-fold |
@@ -103,9 +138,11 @@ Todos os scripts seguem o mesmo pipeline:
 | `main/Comparações/knn_dt_nb_trees.py` | NB + Árvore + KNN | `BernoulliNB(alpha=1.0)`; `max_depth=3`; `k=5` | hold-out 25% + 5-fold |
 | `main/Comparações/knn_dt__nb_trees_forest.py` | NB + Árvore + RF + KNN | + `n_estimators=200` | hold-out 25% + 5-fold |
 
-Detalhe importante: o **Naive Bayes exige features binárias**, então `knn_dt_nb_trees.py` e
-`knn_dt__nb_trees_forest.py` usam um `preprocessador_nb` dedicado com
-`StandardScaler` → `Binarizer(threshold=0.0)` na coluna numérica.
+Detalhe importante: o **Naive Bayes exige features binárias**. Nos scripts antigos
+(`knn_dt_nb_trees.py` e `knn_dt__nb_trees_forest.py`) isso é resolvido com um `preprocessador_nb`
+dedicado, com `StandardScaler` → `Binarizer(threshold=0.0)` na coluna numérica. Na versão reescrita
+(`Bernoulli-NB`), a numérica vira categoria com `OneHotEncoder` e o texto usa
+`CountVectorizer(binary=True)`.
 
 `main/decision-tree/tree.py` apenas plota a árvore treinada em `main/decision-tree/main.py`
 com `plot_tree` e `matplotlib`.
@@ -130,17 +167,22 @@ pip install -r main/requirements.txt
 ```
 
 Dependências (`main/requirements.txt`): `pandas`, `scikit-learn`, `numpy`, `matplotlib`,
-`seaborn`, `openpyxl`.
+`seaborn`, `openpyxl` (necessário para ler o `.xlsx`).
 
 ### Executando os scripts
 
-> **Atenção:** todos os scripts usam caminhos **relativos** ao diretório de trabalho.
+Os scripts reescritos (`KNN`, `Bernoulli-NB` e `Comparações/knn_bnb.py`) montam o caminho do dataset a
+partir da localização do próprio arquivo, então podem ser executados de qualquer pasta.
+
+> **Atenção:** os demais scripts ainda usam caminhos **relativos** ao diretório de trabalho.
 > Execute cada um a partir da pasta indicada na tabela — caso contrário você recebe
 > `FileNotFoundError` ao ler o dataset.
 
 | Script | Executar a partir de | Comando |
 | --- | --- | --- |
-| `KNN/main.py` | `main/` | `python KNN/main.py` |
+| `KNN/main.py` | qualquer pasta | `python main/KNN/main.py` |
+| `Bernoulli-NB/main.py` | qualquer pasta | `python main/Bernoulli-NB/main.py` |
+| `Comparações/knn_bnb.py` | qualquer pasta | `python main/Comparações/knn_bnb.py` |
 | `Naive-Bayes-KNN/main.py` | `main/Naive-Bayes-KNN/` | `python main.py` |
 | `decision-tree/main.py` | `main/` | `python decision-tree/main.py` |
 | `decision-tree/tree.py` | `main/` | `python decision-tree/tree.py` |
@@ -153,96 +195,23 @@ Dependências (`main/requirements.txt`): `pandas`, `scikit-learn`, `numpy`, `mat
 então ele **depende** de `main/decision-tree/main.py` e precisa de um backend interativo
 do matplotlib para exibir a figura.
 
----
-
-## Resultados
-
-Os números abaixo foram medidos neste repositório (Python 3.13.7, scikit-learn 1.9.1,
-pandas 3.0.5). Cada tabela corresponde à execução de um script.
-
-### KNN isolado — `main/KNN/main.py`
-
-Acurácia média da validação cruzada 5-fold, com TF-IDF + One-Hot + `passthrough`:
-
-| Modelo | Acurácia média | Desvio padrão |
-| --- | --- | --- |
-| KNN = 3 | 43,58% | 16,11% |
-| **KNN = 5** | **48,83%** | 21,40% |
-| KNN = 7 | 47,42% | 20,04% |
-
-### KNN vs. Naive Bayes — `main/Naive-Bayes-KNN/main.py`
-
-| Modelo | Acurácia média | Desvio padrão |
-| --- | --- | --- |
-| KNN = 3 | 26,92% | 8,24% |
-| KNN = 5 | 33,67% | 15,53% |
-| **KNN = 7** | **38,58%** | 10,44% |
-| Naive Bayes (`MultinomialNB`) | 33,33% | 14,21% |
-
-O `KNN=7` venceu o Naive Bayes por **5,25 pontos percentuais**.
-
-### Árvore de Decisão — `main/decision-tree/main.py`
-
-Acurácia no conjunto de teste (hold-out 25%): **0,35**.
-A matriz de confusão mostra concentração forte na coluna `swords`, indicando que a árvore
-(max_depth=3) quase não diferencia os naipes.
-
-### Comparação completa — `main/Comparações/knn_dt__nb_trees_forest.py`
-
-Validação cruzada 5-fold sobre a base Excel (One-Hot + StandardScaler):
-
-| Modelo | Acurácia média | Desvio padrão |
-| --- | --- | --- |
-| Árvore de Decisão | 29,50% | 10,18% |
-| KNN (k=5) | 32,08% | 8,11% |
-| BernoulliNB | 42,50% | 9,42% |
-| **Random Forest** | **48,83%** | 11,00% |
-
-Métricas no hold-out de 25% do mesmo script:
-
-| Modelo | Acurácia | Macro F1 |
-| --- | --- | --- |
-| BernoulliNB | 0,50 | 0,4754 |
-| Árvore de Decisão | 0,35 | 0,2386 |
-| Random Forest | 0,50 | 0,4866 |
-| KNN (k=5) | 0,35 | 0,3222 |
-
-**Melhor algoritmo: Random Forest, com 48,83% de acurácia média no 5-fold.**
-
-### Importância das features — `main/decision-tree/random -forest/main.py`
-
-A Random Forest (200 árvores, `f1_macro` de 42,86% ± 7,53% no 5-fold interno de treino)
-apontou como features mais relevantes:
-
-| Feature | Importância |
-| --- | --- |
-| `number_numerology` | 0,1571 |
-| `yes_no_yes` | 0,0557 |
-| `zodiac_Capricorn` | 0,0529 |
-| `zodiac_Cancer` | 0,0436 |
-| `yes_no_reversed_no` | 0,0407 |
-
-O número de numerologia concentra ~16% da importance — é o único sinal numérico com
-valor discriminativo real no dataset.
-
-### Referências de comparação
-
-| Modelo de referência | Acurácia |
-| --- | --- |
-| Sempre prever a classe majoritária (`major`) | 28,20% |
-| Aleatório uniforme entre 5 classes | 20,00% |
-| Melhor modelo obtido aqui (Random Forest) | 48,83% |
+Os scripts de KNN e Bernoulli NB fazem busca em grade dentro de validação aninhada e podem levar
+mais tempo que os demais.
 
 ---
 
 ## Conclusões
 
-1. **Random Forest é o algoritmo mais estável** do estudo: lidera tanto no 5-fold (48,83%)
-   quanto no hold-out, e ainda é o único com macro F1 acima de 0,48.
+As conclusões 1 a 5 vêm das execuções originais e devem ser revisadas quando os resultados da
+versão reescrita forem preenchidos.
+
+1. **Random Forest é o algoritmo mais estável** nas execuções originais: lidera tanto no 5-fold
+   (48,83%) quanto no hold-out, e ainda é o único com macro F1 acima de 0,48.
 2. **KNN é altamente sensível à representação dos dados.** Com TF-IDF + One-Hot + `passthrough`
    o k=5 atinge 48,83%; com One-Hot + StandardScaler o mesmo k=5 cai para 32,08%. Como a
    distância euclidiana é distorcida por vetores esparsos de texto, a escolha do pré-processamento
-   importa mais do que o k.
+   importa mais do que o k. A versão reescrita testa essa hipótese com distância cosseno e
+   escala na coluna numérica.
 3. **Naive Bayes se beneficia de features binárias** (`Binarizer` na coluna numérica):
    42,50% contra os 33,33% do `MultinomialNB` com features contínuas.
 4. **A árvore podada (`max_depth=3`) é insuficiente** — 29,50% fica abaixo do baseline da classe
@@ -250,6 +219,9 @@ valor discriminativo real no dataset.
 5. **O volume de dados é o principal gargalo.** Com 78 amostras e features majoritariamente
    categóricas de baixa cardinalidade, o teto de ~50% de acurácia reflete mais a qualidade
    dos atributos do que a escolha do classificador.
+6. **A validação aninhada dá uma estimativa menos otimista.** Escolher `k`, `alpha` e os pesos de
+   bloco olhando o próprio resultado do fold inflaria a acurácia; na versão reescrita essa escolha
+   acontece só dentro do treino de cada fold externo.
 
 ---
 
@@ -262,7 +234,9 @@ valor discriminativo real no dataset.
 │   │   ├── cards.json              # base JSON (78 × 22)
 │   │   └── Dataset-Sheet.xlsx      # mesma base em Excel (aba "cards")
 │   ├── KNN/
-│   │   └── main.py                 # KNN k=3,5,7 com TF-IDF
+│   │   └── main.py                 # KNN com Pipeline, cosseno e CV aninhada
+│   ├── Bernoulli-NB/
+│   │   └── main.py                 # Bernoulli NB com features binárias e CV aninhada
 │   ├── Naive-Bayes-KNN/
 │   │   └── main.py                 # KNN vs. MultinomialNB
 │   ├── decision-tree/
@@ -271,6 +245,7 @@ valor discriminativo real no dataset.
 │   │   └── random -forest/
 │   │       └── main.py             # Random Forest + importâncias de features
 │   ├── Comparações/
+│   │   ├── knn_bnb.py              # KNN vs. Bernoulli NB (CV aninhada)
 │   │   ├── knn_dt.py               # Árvore vs. KNN
 │   │   ├── knn_dt_nb_trees.py      # + BernoulliNB
 │   │   └── knn_dt__nb_trees_forest.py  # + Random Forest (comparação final)
@@ -279,16 +254,4 @@ valor discriminativo real no dataset.
 └── .gitignore
 ```
 
-> `main/libs` (venv) não é versionado. As pastas `Comparações/` e
-> `decision-tree/random -forest/` ainda não foram commitadas.
-
-
-
-## Referências
-
-- [scikit-learn — KNeighborsClassifier](https://scikit-learn.org/stable/modules/generated/sklearn.neighbors.KNeighborsClassifier.html)
-- [scikit-learn — Naive Bayes](https://scikit-learn.org/stable/modules/naive_bayes.html)
-- [scikit-learn — DecisionTreeClassifier](https://scikit-learn.org/stable/modules/generated/sklearn.tree.DecisionTreeClassifier.html)
-- [scikit-learn — RandomForestClassifier](https://scikit-learn.org/stable/modules/generated/sklearn.ensemble.RandomForestClassifier.html)
-- [scikit-learn — StratifiedKFold](https://scikit-learn.org/stable/modules/generated/sklearn.model_selection.StratifiedKFold.html)
 
