@@ -1,13 +1,13 @@
-# Cartas de Tarot — Algoritmos de Machine Learning
+# Algoritmos de Machine Learning
 
 Experimento de classificação supervisionada que tenta identificar o **grupo de uma carta de tarot**
 (arcano maior ou um dos quatro naipes) a partir dos atributos presentes na base de cartas.
-O projeto compara famílias de algoritmos de ML usando validação cruzada e diferentes
+O projeto compara famílias de algoritmos de ML e Redes Neurais Artificiais usando validação cruzada e diferentes
 esquemas de pré-processamento.
 
 - **Tarefa:** classificação multiclasse (5 classes)
 - **Amostras:** 78 cartas (22 arcanos maiores + 56 cartas de naipe)
-- **Stack:** Python 3.13 + pandas + scikit-learn
+- **Stack:** Python 3.13 + pandas + scikit-learn + numpy
 
 ---
 
@@ -248,7 +248,9 @@ versão reescrita forem preenchidos.
 │   │   ├── knn_bnb.py              # KNN vs. Bernoulli NB (CV aninhada)
 │   │   ├── knn_dt.py               # Árvore vs. KNN
 │   │   ├── knn_dt_nb_trees.py      # + BernoulliNB
-│   │   └── knn_dt__nb_trees_forest.py  # + Random Forest (comparação final)
+│   │   └── knn_dt__nb_trees_forest.py # + Random Forest (comparação final)
+│   ├── Perceptrons-RNA/
+│   │   ├── mlp.py                  # Classificação através de um perceptron multilayer
 │   ├── libs/                       # ambiente virtual (não versionado)
 │   └── requirements.txt
 └── .gitignore
