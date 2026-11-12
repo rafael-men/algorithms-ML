@@ -8,7 +8,7 @@ from sklearn.metrics import accuracy_score, confusion_matrix
 from sklearn.model_selection import RepeatedStratifiedKFold, StratifiedKFold, train_test_split
 from sklearn.preprocessing import OneHotEncoder, StandardScaler
 
-# Usa um peceptron multicamadas (MLP) para classificar cartas por naipe e arcano maior
+# Usa um peceptron multicamadas para classificar cartas por naipe e arcano maior
 
 dataset = '../dataset/Dataset-Sheet.xlsx'
 
